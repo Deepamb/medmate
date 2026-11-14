@@ -72,6 +72,16 @@ def add_schedule(med_id: int, data: ScheduleIn, db: Session = Depends(get_db),
     if (data.end_date - data.start_date).days > 366:
         raise HTTPException(400, "A schedule can cover at most one year")
 
+    # Stop accidental double clicks: the same schedule cannot be added twice.
+    duplicate = db.query(Schedule).filter(
+        Schedule.medicine_id == med.id,
+        Schedule.time_of_day == data.time_of_day,
+        Schedule.start_date == data.start_date,
+        Schedule.end_date == data.end_date,
+    ).first()
+    if duplicate:
+        raise HTTPException(409, "This schedule already exists for this medicine")
+
     sched = Schedule(medicine_id=med.id, time_of_day=data.time_of_day,
                      start_date=data.start_date, end_date=data.end_date)
     db.add(sched)

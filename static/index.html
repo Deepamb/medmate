@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MedMate</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+:root{--bg:#f2f5f7;--ink:#14213d;--muted:#5b6778;--line:#d5dde3;--teal:#0f7b6c;--teal-d:#0b5c51;--red:#b8392a;--surface:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#10171f;--ink:#e8eef3;--muted:#9aa8b6;--line:#2a3541;--teal:#35b5a2;--teal-d:#5fd0be;--red:#ef7a6b;--surface:#18212b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.5 "Atkinson Hyperlegible",system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;justify-content:space-between;align-items:center;padding:8px 0 16px;border-bottom:3px solid var(--teal)}
+h1{margin:0;font-size:1.7rem;letter-spacing:-.02em}
+h2{font-size:1.25rem;margin:24px 0 8px}
+button,input,select{font:inherit;color:inherit}
+input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);margin:4px 0 12px}
+label{font-size:.9rem;color:var(--muted)}
+button{cursor:pointer;border:1px solid var(--line);background:var(--surface);padding:9px 16px;border-radius:6px}
+button.primary{background:var(--teal);border-color:var(--teal);color:#fff;font-weight:700}
+button.danger{color:var(--red)}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--teal);outline-offset:2px}
+nav{display:flex;gap:6px;margin:16px 0;flex-wrap:wrap}
+nav button[aria-current=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.row b{display:block}.muted{color:var(--muted);font-size:.92rem}
+.status{font-weight:700}.taken{color:var(--teal-d)}.skipped{color:var(--muted)}.pending{color:var(--ink)}
+.actions{display:flex;gap:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.msg{padding:10px 12px;border-left:4px solid var(--red);background:var(--surface);margin:12px 0}
+.ok{border-color:var(--teal)}
+.big{font-size:3rem;font-weight:700;line-height:1;margin:0}
+.hidden{display:none}
+details{border-bottom:1px solid var(--line);padding:6px 0}
+summary{cursor:pointer;padding:8px 0}
+</style>
+</head>
+<body>
+<main>
+<header><h1>MedMate</h1><div id="who" class="muted"></div></header>
+<div id="msg" role="status"></div>
+
+<section id="auth" class="hidden">
+  <nav><button id="tab-in" aria-current="true">Sign in</button><button id="tab-up">Create account</button></nav>
+  <form id="auth-form">
+    <div id="name-wrap" class="hidden"><label for="name">Name</label><input id="name" autocomplete="name"></div>
+    <label for="email">Email</label><input id="email" type="email" required autocomplete="email">
+    <label for="password">Password (8+ characters)</label><input id="password" type="password" required minlength="8" autocomplete="current-password">
+    <button class="primary" id="auth-btn">Sign in</button>
+  </form>
+</section>
+
+<section id="app" class="hidden">
+  <nav id="tabs">
+    <button data-v="today" aria-current="true">Today</button><button data-v="meds">Medicines</button>
+    <button data-v="report">Report</button><button data-v="settings">Settings</button>
+    <button id="out">Sign out</button>
+  </nav>
+  <div id="view"></div>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let token = localStorage.getItem('mm_token'), signup = false;
+
+function say(text, ok){ $('#msg').innerHTML = text ? `<div class="msg ${ok?'ok':''}">${esc(text)}</div>` : ''; }
+
+async function api(path, o = {}){
+  const h = {};
+  if (token) h.Authorization = 'Bearer ' + token;
+  if (o.json){ h['Content-Type'] = 'application/json'; o.body = JSON.stringify(o.json); }
+  const r = await fetch(path, {method:o.method||'GET', headers:h, body:o.body});
+  if (r.status === 401 && token){ signOut(); throw new Error('Session expired. Sign in again.'); }
+  const data = r.status === 204 ? null : await r.json().catch(() => null);
+  if (!r.ok){
+    const d = data && data.detail;
+    throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? 'Please check the fields you entered.' : 'Request failed');
+  }
+  return data;
+}
+
+function signOut(){ token = null; localStorage.removeItem('mm_token'); boot(); }
+
+async function boot(){
+  say('');
+  if (!token){ $('#auth').classList.remove('hidden'); $('#app').classList.add('hidden'); $('#who').textContent=''; return; }
+  try{
+    const me = await api('/auth/me');
+    $('#who').textContent = me.name;
+    $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
+    show('today');
+  }catch(e){ say(e.message); }
+}
+
+$('#tab-in').onclick = () => setMode(false);
+$('#tab-up').onclick = () => setMode(true);
+function setMode(up){
+  signup = up;
+  $('#name-wrap').classList.toggle('hidden', !up);
+  $('#tab-in').setAttribute('aria-current', !up); $('#tab-up').setAttribute('aria-current', up);
+  $('#auth-btn').textContent = up ? 'Create account' : 'Sign in';
+}
+
+$('#auth-form').onsubmit = async e => {
+  e.preventDefault(); say('');
+  const email = $('#email').value.trim(), password = $('#password').value;
+  try{
+    if (signup){
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
+      await api('/auth/register', {method:'POST', json:{name:$('#name').value.trim()||'Friend', email, password, timezone:tz}});
+    }
+    const r = await fetch('/auth/login', {method:'POST', body:new URLSearchParams({username:email, password})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Sign in failed');
+    token = d.access_token; localStorage.setItem('mm_token', token); boot();
+  }catch(err){ say(err.message); }
+};
+
+$('#out').onclick = signOut;
+$('#tabs').onclick = e => { const v = e.target.dataset.v; if (v) show(v); };
+
+async function show(v){
+  say('');
+  document.querySelectorAll('#tabs [data-v]').forEach(b => b.setAttribute('aria-current', b.dataset.v === v));
+  try{ await ({today, meds, report, settings})[v](); }catch(e){ say(e.message); }
+}
+
+async function today(){
+  const [doses, al] = await Promise.all([api('/doses/today'), api('/alerts')]);
+  let h = '<h2>Today</h2>';
+  h += doses.length ? doses.map(d => `
+    <div class="row"><div><b>${esc(d.medicine)} <span class="muted">${esc(d.dosage)}</span></b>
+      <span class="muted">${esc(d.due_local)}</span> &middot; <span class="status ${d.status}">${d.status}</span></div>
+      ${d.status==='pending' ? `<div class="actions"><button class="primary" data-dose="${d.id}" data-s="taken">Mark taken</button>
+      <button data-dose="${d.id}" data-s="skipped">Skip</button></div>` : ''}</div>`).join('')
+    : '<p class="muted">No doses today. Add a medicine and a schedule under Medicines.</p>';
+  if (al.expiring.length || al.low_stock.length){
+    h += '<h2>Needs attention</h2>';
+    h += al.expiring.map(m => `<div class="row"><span>${esc(m.name)} expires ${esc(m.expiry_date)}</span></div>`).join('');
+    h += al.low_stock.map(m => `<div class="row"><span>${esc(m.name)}: ${m.quantity_left} left</span></div>`).join('');
+  }
+  $('#view').innerHTML = h;
+  $('#view').onclick = async e => {
+    const id = e.target.dataset.dose; if (!id) return;
+    try{ await api('/doses/' + id, {method:'PATCH', json:{status:e.target.dataset.s}}); today(); }catch(err){ say(err.message); }
+  };
+}
+
+async function meds(){
+  const list = await api('/medicines');
+  const d = new Date().toISOString().slice(0,10);
+  let h = `<h2>Add a medicine</h2><form id="med-form"><div class="grid2">
+    <div><label for="m-name">Name</label><input id="m-name" required></div>
+    <div><label for="m-dose">Dosage (for example 500mg)</label><input id="m-dose" required></div>
+    <div><label for="m-exp">Expiry date</label><input id="m-exp" type="date" required></div>
+    <div><label for="m-qty">Tablets left</label><input id="m-qty" type="number" min="0" value="10" required></div></div>
+    <button class="primary">Save medicine</button></form><h2>Your medicines</h2>`;
+  h += list.length ? list.map(m => `<details><summary><b>${esc(m.name)}</b> ${esc(m.dosage)}
+      <span class="muted">expires ${esc(m.expiry_date)} &middot; ${m.quantity_left} left</span></summary>
+      <form class="sched" data-id="${m.id}"><div class="grid2">
+        <div><label>Time of day</label><input type="time" class="s-time" required></div>
+        <div><label>First day</label><input type="date" class="s-start" value="${d}" required></div>
+        <div><label>Last day</label><input type="date" class="s-end" value="${d}" required></div></div>
+        <div class="actions"><button class="primary">Add schedule</button>
+        <button type="button" class="danger" data-del="${m.id}">Delete medicine</button></div></form></details>`).join('')
+    : '<p class="muted">No medicines yet.</p>';
+  $('#view').innerHTML = h;
+  $('#view').onclick = async e => {
+    const id = e.target.dataset.del; if (!id || !confirm('Delete this medicine and its schedule?')) return;
+    try{ await api('/medicines/' + id, {method:'DELETE'}); meds(); }catch(err){ say(err.message); }
+  };
+  $('#med-form').onsubmit = async e => {
+    e.preventDefault();
+    try{
+      await api('/medicines', {method:'POST', json:{name:$('#m-name').value.trim(), dosage:$('#m-dose').value.trim(),
+        expiry_date:$('#m-exp').value, quantity_left:+$('#m-qty').value}});
+      meds(); say('Medicine saved.', true);
+    }catch(err){ say(err.message); }
+  };
+  document.querySelectorAll('.sched').forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    try{
+      const r = await api(`/medicines/${f.dataset.id}/schedules`, {method:'POST', json:{
+        time_of_day:f.querySelector('.s-time').value, start_date:f.querySelector('.s-start').value, end_date:f.querySelector('.s-end').value}});
+      say(`Schedule added. ${r.doses_created} reminders created.`, true);
+    }catch(err){ say(err.message); }
+  });
+}
+
+async function report(){
+  const r = await api('/report/weekly');
+  $('#view').innerHTML = `<h2>Last 7 days</h2>
+    <p class="big">${r.adherence_percent === null ? '-' : r.adherence_percent + '%'}</p>
+    <p class="muted">of doses taken</p>
+    <div class="row"><span>Taken</span><b>${r.taken}</b></div>
+    <div class="row"><span>Skipped</span><b>${r.skipped}</b></div>
+    <div class="row"><span>Missed</span><b>${r.missed}</b></div>`;
+}
+
+async function settings(){
+  const [me, cg] = await Promise.all([api('/auth/me'), api('/caregivers')]);
+  $('#view').innerHTML = `<h2>Reminders</h2>
+    <form id="set-form"><label for="tg">Telegram chat ID (optional, leave empty to skip)</label>
+    <input id="tg" value="${esc(me.telegram_chat_id || '')}">
+    <label for="tz">Time zone</label><input id="tz" value="${esc(me.timezone)}">
+    <button class="primary">Save settings</button></form>
+    <h2>Caregivers</h2>
+    ${cg.length ? cg.map(c => `<div class="row"><span>${esc(c.name)} <span class="muted">${esc(c.email)}</span></span></div>`).join('') : '<p class="muted">No caregiver linked. They get a message if you miss a dose.</p>'}
+    <form id="cg-form"><label for="cg-email">Caregiver's email (they must have an account)</label>
+    <input id="cg-email" type="email" required><button class="primary">Add caregiver</button></form>`;
+  $('#set-form').onsubmit = async e => {
+    e.preventDefault();
+    try{ await api('/auth/me', {method:'PUT', json:{telegram_chat_id:$('#tg').value.trim(), timezone:$('#tz').value.trim()}}); say('Settings saved.', true); }
+    catch(err){ say(err.message); }
+  };
+  $('#cg-form').onsubmit = async e => {
+    e.preventDefault();
+    try{ await api('/caregivers', {method:'POST', json:{email:$('#cg-email').value.trim()}}); settings(); say('Caregiver added.', true); }
+    catch(err){ say(err.message); }
+  };
+}
+
+boot();
+</script>
+</body>
+</html>

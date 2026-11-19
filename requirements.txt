@@ -10,3 +10,4 @@ requests
 tzdata
 pytest
 httpx
+psycopg[binary]
